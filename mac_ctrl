@@ -1,0 +1,395 @@
+#!/usr/bin/env python
+"""
+    Control Mac Fans, Keyboard and Display Backlighting
+    Copyright 2013 by Brian C. Lane
+    All Rights Reserved
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions are met:
+
+        * Redistributions of source code must retain the above copyright
+          notice, this list of conditions and the following disclaimer.
+
+        * Redistributions in binary form must reproduce the above copyright
+          notice, this list of conditions and the following disclaimer in the
+          documentation and/or other materials provided with the distribution.
+
+        * Neither the name of the <ORGANIZATION> nor the names of its
+          contributors may be used to endorse or promote products derived from
+          this software without specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+    AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+    IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+    ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+    LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+    CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+    SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
+    BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+    LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+    NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+    If you have any questions about this license please email bcl@brianlane.com
+
+    ====
+    This code may need custom classes for your specific MacBook. You can define
+    new classes and then map them to your device in the sys_map dict located
+    above main()
+
+"""
+import sys
+import glob
+import re
+import argparse
+from collections import namedtuple
+
+class Command(object):
+    """ Handle adjusting a value between a minimum and maximum using
+        either absolute or relative values.
+
+        number        = set to absolute value
+        number%       = set to % of maximum
+        number[+|-]   = add or subtract absolute value from current
+        number%[+|-]  = add or subtract % of max from current
+    """
+    def __init__(self, clip=True):
+        """ Setup the argparse options for this command
+
+            clip = How to handle < min or > max. True will return the limit,
+                   False will return the current value with no change.
+        """
+        self.clip = clip
+
+    def get(self):
+        """ Get the value """
+        raise NotImplemented("Missing get method")
+
+    def get_min(self):
+        """ Get the minimum value """
+        raise NotImplemented("Missing get_min method")
+
+    def get_max(self):
+        """ Get the maximum value """
+        raise NotImplemented("Missing get_max method")
+
+    def set(self, value):
+        """ Handle relative value strings and return an integer
+
+            number        = set to absolute value
+            number%       = set to % of maximum
+            number[+|-]   = add or subtract absolute value from current
+            number%[+|-]  = add or subtract % of max from current
+
+            If clip was set it will stop at the min/max limits. If
+            not it will return the previous value if the new one would
+            exceed the limits.
+        """
+        try:
+            if value[-1] == "%":
+                new_value = int(value[:-1]) * self.get_max() * 0.01
+            elif value[-1] in ("+", "-"):
+                if len(value) > 2 and value[-2:] in ("%+", "%-"):
+                    adj = int(value[:-2]) * self.get_max() * 0.01
+                elif value[-1] in ("+", "-"):
+                    adj = int(value[:-1])
+
+                if value[-1] == "+":
+                    new_value = self.get() + adj
+                elif value[-1] == "-":
+                    new_value = self.get() - adj
+        except Exception as e:
+            raise
+
+        if new_value > self.get_max():
+            new_value = self.get_max() if self.clip else value
+        elif new_value < self.get_min():
+            new_value = self.get_min() if self.clip else value
+
+        return int(new_value)
+
+    def set_values(self, values):
+        """ Set more than one value """
+        raise NotImplemented("Missing set_values method")
+
+
+class Temperature(Command):
+    # These appear to be the cores and the package temps
+    # We are interested in temp%d_input values which look like they are in C
+    # multiplied by 1000. I haven't observed anything less than a 1C change
+    TEMP_PATH="/sys/devices/platform/coretemp.0/"
+
+    def __init__(self, parser):
+        super(Temperature, self).__init__()
+
+        parser.add_argument("--get-temps", action="store_true",
+                            help="Get the current temps.")
+        parser.add_argument("--get-max-temp", action="store_true",
+                            help="Get the maximum temperature")
+
+        self._temp_list = []
+
+    @property
+    def temp_list(self):
+        """ Return a list of valid temperature ids """
+        if self._temp_list:
+            return self._temp_list
+
+        pattern = re.compile(".*temp(\d+)_input")
+        for f in glob.glob(self.TEMP_PATH+"temp*_input"):
+            try:
+                id = int(pattern.match(f).group(1))
+                self._temp_list.append(id)
+            except AttributeError:
+                pass
+        sorted(self._temp_list)
+        return self._temp_list
+
+    def _get_temp(self, id):
+        """ Read the specific temperature """
+        if id not in self.temp_list:
+            return
+
+        with open(self.TEMP_PATH+"temp%d_input" % id) as f:
+            c = int(f.read()) / 1000
+        return c
+
+    def get(self):
+        """ Return a list of all the temperatures """
+        return map(self._get_temp, self.temp_list)
+
+
+FanInfo = namedtuple("FanInfo", ["cur", "min", "max"])
+
+class Fan(Command):
+    """ Information on a single fan
+
+        Note that I use fanX_min to actually control the fan in the hope that
+        the system will still control it at higher temperatures. This means that
+        the min value returned will be the same as the current setting.
+    """
+    # I have 2 fans in the MacBookPro9,1
+    # The best way to manipulte it seems to be to set fan%d_min so that you
+    # don't completely override the system's control.
+    # Current speed is fan%d_output
+    FAN_PATH="/sys/devices/platform/applesmc.768/"
+
+    def __init__(self, id):
+        super(Fan, self).__init__()
+
+        self.id = id
+        self.info = None
+
+        self._update_fan_info()
+
+    def _update_fan_info(self):
+        """ Return a FanInfo tuple with curremt, min, max values """
+        fan_files = ("fan%d_output", "fan%d_min", "fan%d_max")
+        rpms = []
+        for ff in fan_files:
+            with open(self.FAN_PATH+ff % self.id) as f:
+                rpm = int(f.read())
+                rpms.append(rpm)
+        self.info = FanInfo(*rpms)
+
+    def info(self):
+        """ Return a FanInfo tuple with curremt, min, max values """
+        return self.info
+
+    def get(self):
+        return self.info.cur
+
+    def get_min(self):
+        return 2000
+
+    def get_max(self):
+        return self.info.max
+
+    def set(self, value):
+        value = super(Fan, self).set(value)
+        if value > self.get_max():
+            return
+
+        # Use the fan minimum to control speed
+        # This should allow the system to select higher speeds as needed
+        with open(self.FAN_PATH+"fan%d_min" % self.id, "w") as f:
+            f.write("%s\n" % value)
+
+        self._update_fan_info()
+
+
+class Fans(Fan):
+    """ Control of all fans in the system """
+    def __init__(self, parser):
+        parser.add_argument("--get-fans", action="store_true",
+                            help="Get the fan's (cur, min, max) values")
+        parser.add_argument("--set-fans", metavar="RPMS",
+                            help="Set the fans to VALUE rpms")
+
+        self._fan_list = []
+
+    @property
+    def fan_list(self):
+        """ Return a list of fan ids """
+        if self._fan_list:
+            return self._fan_list
+
+        # Get the list of possible fan ids
+        pattern = re.compile(".*fan(\d+)_input")
+        for f in glob.glob(self.FAN_PATH+"fan*_input"):
+            try:
+                id = int(pattern.match(f).group(1))
+                self._fan_list.append(id)
+            except AttributeError:
+                pass
+        sorted(self._fan_list)
+        return self._fan_list
+
+    def get(self):
+        """ Return FanInfo for each of the fans """
+        return map(lambda id: Fan(id).info, self.fan_list)
+
+    def set(self, value):
+        """ Set all the fans to the same speed """
+        for id in self.fan_list:
+            Fan(id).set(value)
+
+
+class KeyboardBrightness(Command):
+    """ Control the keyboard leds """
+    # Keyboard leds
+    # brightness has the value and sets the value when written
+    # There is also a max_brightness, not sure if it is worth hooking up
+    KBD_LEDS_PATH="/sys/devices/platform/applesmc.768/leds/smc::kbd_backlight/"
+
+    def __init__(self, parser):
+        super(KeyboardBrightness, self).__init__()
+
+        parser.add_argument("--get-kbd", action="store_true",
+                            help="Get the current keyboard brightness setting")
+        parser.add_argument("--set-kbd",
+                            help="Set the keyboard brightness level")
+
+    def get_max(self):
+        with open(self.KBD_LEDS_PATH+"max_brightness") as f:
+            return int(f.read())
+
+    def get_min(self):
+        """ Minimum appears to be 1, setting it to 0 doesn't turn them off """
+        return 1
+
+    def get(self):
+        with open(self.KBD_LEDS_PATH+"brightness") as f:
+            return int(f.read())
+
+    def set(self, value):
+        """ Set the keyboard led level """
+        value = super(KeyboardBrightness, self).set(value)
+        if value < self.get_min() or value > self.get_max():
+            return
+
+        with open(self.KBD_LEDS_PATH+"brightness", "w") as f:
+            f.write("%s\n" % value)
+
+
+class DisplayBrightness(Command):
+    """ Display brightness """
+    # brightness has the value
+    # max_brightness has the max
+    # Set this too low and you won't see anything so limit it to 5% of max
+    DISP_BRIGHT_PATH="/sys/class/backlight/gmux_backlight/"
+
+    def __init__(self, parser):
+        super(DisplayBrightness, self).__init__()
+
+        parser.add_argument("--get-display", action="store_true",
+                            help="Get the display brightness")
+        parser.add_argument("--set-display",
+                            help="Set the display brightness")
+
+    def get(self):
+        with open(self.DISP_BRIGHT_PATH+"brightness") as f:
+            return int(f.read())
+
+    def get_max(self):
+        with open(self.DISP_BRIGHT_PATH+"max_brightness") as f:
+            return int(f.read())
+
+    def get_min(self):
+        """ Limit the minimum to 5% of max, otherwise you wouldn't be able to
+            see anything.
+        """
+        return self.get_max() * 0.05
+
+    def set(self, value):
+        """ Set the display brightness """
+        value = super(DisplayBrightness, self).set(value)
+
+        # Don't set it > max or < 5% of max
+        if value < self.get_min() or value > self.get_max():
+            return
+
+        with open(self.DISP_BRIGHT_PATH+"brightness", "w") as f:
+            f.write("%s\n" % value)
+
+
+# Mapping of /sys/class/dmi/id/board_version to dict of classes
+sys_map = { "MacBookPro9,1" : { "temperature"   : Temperature,
+                                "fans"          : Fans,
+                                "keyboard"      : KeyboardBrightness,
+                                "display"       : DisplayBrightness
+                              }
+          }
+
+
+def main():
+    """
+    Main code goes here
+    """
+    system_id = open("/sys/class/dmi/id/board_version").read().strip()
+    if system_id not in sys_map:
+        print "Your system id (%s) was not found in sys_map, you need to edit %s" % (system_id, sys.argv[0])
+        sys.exit(1)
+    else:
+        class_map = sys_map[system_id]
+
+    parser = argparse.ArgumentParser(description='Control Macbook Fan and Backlighting')
+
+    temperature = class_map["temperature"](parser)
+    fans = class_map["fans"](parser)
+    keyboard = class_map["keyboard"](parser)
+    display = class_map["display"](parser)
+
+    args = parser.parse_args()
+
+    if args.set_fans:
+        fans.set(args.set_fans)
+
+    if args.get_fans:
+        # Print the unique fan speeds
+        fans = fans.get()
+        speeds = set([f.cur for f in fans])
+        print "/".join(["%s" % s for s in speeds])
+
+    if args.get_temps:
+        print " ".join(map(str, temperature.get()))
+
+    if args.get_max_temp:
+        print max(temperature.get())
+
+    if args.set_kbd:
+        keyboard.set(args.set_kbd)
+
+    if args.get_kbd:
+        print keyboard.get()
+
+    if args.set_display:
+        display.set(args.set_display)
+
+    if args.get_display:
+        print display.get()
+
+
+if __name__ == '__main__':
+    main()
+
