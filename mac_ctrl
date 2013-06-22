@@ -98,6 +98,8 @@ class Command(object):
                     new_value = self.get() + adj
                 elif value[-1] == "-":
                     new_value = self.get() - adj
+            else:
+                new_value = int(value)
         except Exception as e:
             raise
 
