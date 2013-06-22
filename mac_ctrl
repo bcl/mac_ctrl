@@ -292,6 +292,28 @@ class KeyboardBrightness(Command):
             f.write("%s\n" % value)
 
 
+class DummyKeyboard(Command):
+    """ Control the keyboard leds """
+    def __init__(self, parser):
+        super(DummyKeyboard, self).__init__()
+
+        parser.add_argument("--get-kbd", action="store_true",
+                            help="Get the current keyboard brightness setting")
+        parser.add_argument("--set-kbd",
+                            help="Set the keyboard brightness level")
+
+    def get_max(self):
+	return None
+
+    def get_min(self):
+	return None
+
+    def get(self):
+	return None
+
+    def set(self, value):
+	pass
+
 class DisplayBrightness(Command):
     """ Display brightness """
     # brightness has the value
@@ -333,11 +355,24 @@ class DisplayBrightness(Command):
             f.write("%s\n" % value)
 
 
+class DisplayBrightnessMBA32(DisplayBrightness):
+    """ Display brightness """
+    # brightness has the value
+    # max_brightness has the max
+    # Set this too low and you won't see anything so limit it to 5% of max
+    DISP_BRIGHT_PATH="/sys/class/backlight/nv_backlight/"
+
+
 # Mapping of /sys/class/dmi/id/board_version to dict of classes
 sys_map = { "MacBookPro9,1" : { "temperature"   : Temperature,
                                 "fans"          : Fans,
                                 "keyboard"      : KeyboardBrightness,
                                 "display"       : DisplayBrightness
+                              },
+            "MacBookAir3,2" : { "temperature"   : Temperature,
+                                "fans"          : Fans,
+                                "keyboard"      : DummyKeyboard,
+                                "display"       : DisplayBrightnessMBA32
                               }
           }
 
