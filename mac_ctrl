@@ -363,6 +363,14 @@ class DisplayBrightnessMBA32(DisplayBrightness):
     DISP_BRIGHT_PATH="/sys/class/backlight/nv_backlight/"
 
 
+class DisplayBrightnessMB31(DisplayBrightness):
+    """ Display brightness """
+    # brightness has the value
+    # max_brightness has the max
+    # Set this too low and you won't see anything so limit it to 5% of max
+    DISP_BRIGHT_PATH="/sys/class/backlight/intel_backlight/"
+
+
 # Mapping of /sys/class/dmi/id/board_version to dict of classes
 sys_map = { "MacBookPro9,1" : { "temperature"   : Temperature,
                                 "fans"          : Fans,
@@ -373,6 +381,11 @@ sys_map = { "MacBookPro9,1" : { "temperature"   : Temperature,
                                 "fans"          : Fans,
                                 "keyboard"      : DummyKeyboard,
                                 "display"       : DisplayBrightnessMBA32
+                              },
+            "MacBook3,1" :    { "temperature"   : Temperature,
+                                "fans"          : Fans,
+                                "keyboard"      : DummyKeyboard,
+                                "display"       : DisplayBrightnessMB31
                               }
           }
 
