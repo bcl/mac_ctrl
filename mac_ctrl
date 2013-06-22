@@ -373,7 +373,7 @@ class DisplayBrightnessMB31(DisplayBrightness):
     DISP_BRIGHT_PATH="/sys/class/backlight/intel_backlight/"
 
 
-# Mapping of /sys/class/dmi/id/board_version to dict of classes
+# Mapping of /sys/class/dmi/id/product_name to dict of classes
 sys_map = { "MacBookPro9,1" : { "temperature"   : Temperature,
                                 "fans"          : Fans,
                                 "keyboard"      : KeyboardBrightness,
