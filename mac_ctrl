@@ -305,16 +305,16 @@ class DummyKeyboard(Command):
                             help="Set the keyboard brightness level")
 
     def get_max(self):
-	return None
+        return None
 
     def get_min(self):
-	return None
+        return None
 
     def get(self):
-	return None
+        return None
 
     def set(self, value):
-	pass
+        pass
 
 class DisplayBrightness(Command):
     """ Display brightness """
