@@ -394,7 +394,7 @@ def main():
     """
     Main code goes here
     """
-    system_id = open("/sys/class/dmi/id/board_version").read().strip()
+    system_id = open("/sys/class/dmi/id/product_name").read().strip()
     if system_id not in sys_map:
         print "Your system id (%s) was not found in sys_map, you need to edit %s" % (system_id, sys.argv[0])
         sys.exit(1)
